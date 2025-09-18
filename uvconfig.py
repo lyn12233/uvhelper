@@ -4,7 +4,7 @@ import xml.etree.ElementTree as ET
 from typing import Self
 import copy
 from warnings import warn
-
+import glob
 
 
 class UVConfigBase(ET.Element):
@@ -619,7 +619,9 @@ class UVPorject(UVConfigBase):
 
 
 def test_config():
-    tree = ET.parse("./tmp2.uvprojx")
+    cand=glob.glob("./*.uvprojx")[0]
+    print(cand)
+    tree = ET.parse(cand)
     proj = UVPorject(tree.getroot())
     print(proj)
     proj.sync_options()
