@@ -1,0 +1,11 @@
+.*/
+*.zip
+Debug*/
+Lib/
+Listings/
+Objects/
+RTE/
+Startup/
+*.uvguix.*
+*.htm
+__pycache__/
