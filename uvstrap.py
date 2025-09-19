@@ -45,18 +45,25 @@ def run_command(cmd: list[str]):
             flush=True,
         )
 
+
 def copy_file(src: str, dst: str):
-    CHUNK_SIZE=4096
+    CHUNK_SIZE = 4096
     if not os.path.isfile(src):
         with print_lock:
-            print(f"\033[38;5;9m>>Copy-File {src} to {dst}: (src not exist)\033[0m", flush=True)
+            print(
+                f"\033[38;5;9m>>Copy-File {src} to {dst}: (src not exist)\033[0m",
+                flush=True,
+            )
         return
-    if not( os.path.isfile(dst) or os.path.isdir(dst) ):
+    if not (os.path.isfile(dst) or os.path.isdir(dst)):
         with print_lock:
-            print(f"\033[38;5;9m>>Copy-File {src} to {dst}: (dst not exist)\033[0m", flush=True)
+            print(
+                f"\033[38;5;9m>>Copy-File {src} to {dst}: (dst not exist)\033[0m",
+                flush=True,
+            )
         return
     if os.path.isdir(dst):
-        dst=os.path.normpath(dst+"/"+os.path.basename(src))
+        dst = os.path.normpath(dst + "/" + os.path.basename(src))
 
     # compare file content
     needs_copy = True
@@ -64,7 +71,9 @@ def copy_file(src: str, dst: str):
         needs_copy = False
         with open(src, "rb") as fsrc, open(dst, "rb") as fdst:
             while not fsrc.peek() != b"" and fdst.peek() != b"":
-                hash_src,hash_dst=hash(fsrc.read(CHUNK_SIZE)),hash(fdst.read(CHUNK_SIZE))
+                hash_src, hash_dst = hash(fsrc.read(CHUNK_SIZE)), hash(
+                    fdst.read(CHUNK_SIZE)
+                )
                 if hash_src != hash_dst:
                     needs_copy = True
                     break
@@ -73,6 +82,7 @@ def copy_file(src: str, dst: str):
             print(f"\033[38;5;10m>>Copy-File: up-to-date: {dst}\033[0m", flush=True)
     else:
         run_command(["cp", os.path.normpath(src), os.path.normpath(dst)])
+
 
 def content_replace(fn: str, matching: re.Pattern | str, replacement: str):
     err_msg: str = ""

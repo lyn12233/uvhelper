@@ -1,18 +1,19 @@
 # from . import uvstrap
 
 import xml.etree.ElementTree as ET
-from typing import Self
+from typing import Self, Sequence
 import copy
 from warnings import warn
 import glob
+from collections import OrderedDict
 
 
 class UVConfigBase(ET.Element):
-    default_vals: dict[str, str]
-    valid_keys: set[str]
-    option_keys: set[str]
-    options: dict[str, str | None]
-    subconfigs: list
+    default_opts: dict[str, str]
+    valid_keys: dict[str, None]
+    option_keys: dict[str, None]
+    options: OrderedDict[str, str | None]
+    subconfigs: Sequence["UVConfigBase"]
 
     def __init__(self, elem: ET.Element | str = "") -> None:
         if isinstance(elem, ET.Element):
@@ -22,93 +23,124 @@ class UVConfigBase(ET.Element):
                 self.append(sube)
         else:
             assert isinstance(elem, str)
+            warn(f"creating empty config <{elem}/>")
             super().__init__(elem)
-        self.default_vals = dict()
-        self.valid_keys = set()
-        self.option_keys = set()
-        self.options = dict()
+        self.default_opts = dict()
+        self.valid_keys = dict()
+        self.option_keys = dict()
+        self.options = OrderedDict()
         self.subconfigs = []
 
-    def load_default(self: Self):
+    # make xml fits to key requirements
+    def load_keys(self: Self):
+        # update keys and validate
+        self.option_keys.update(dict.fromkeys(self.default_opts))
+        self.valid_keys.update(self.option_keys)
+        for key in self.valid_keys:
+            assert key.isidentifier(), f"invalid key {key} in {self.tag}"
+        # remove invalid keys and collect existing keys
         subs: set[str] = set()
-        valid_keys: set[str] = self.valid_keys | set(self.default_vals)
         for elem in self:
-            if not elem.tag in valid_keys:
+            if not elem.tag in self.valid_keys:
                 warn(f"{elem.tag} is not a valid tag in {self.tag}")
                 self.remove(elem)
             else:
                 subs.add(elem.tag)
-        for tag in set(self.default_vals) - subs:
+        # create keys that are options but do not exist
+        for tag in set(self.default_opts) - subs:
             sube = ET.Element(tag)
-            sube.text = self.default_vals[tag]
+            sube.text = self.default_opts[tag]
             warn(
-                f"adding default elem <{tag}>{self.default_vals[tag]}<{tag}/> in {self.tag}"
+                f"adding default elem <{tag}>{self.default_opts[tag]}<{tag}/> in {self.tag}"
             )
             self.append(sube)
 
+    # load self.options from xml
     def load_options(self: Self):
         for key in self.option_keys:
-            assert key.isidentifier()
             elem: ET.Element | None = self.find(f"./{key}")
             if elem is None:
                 warn(f"expected option <{key}>...<{key}/>")
                 self.options[key] = (
-                    self.default_vals[key] if key in self.default_vals else ""
+                    self.default_opts[key] if key in self.default_opts else ""
                 )
             else:
                 self.options[key] = elem.text
-    def sync_options(self: Self,recurse:bool=True):
+
+    def load(self: Self):
+        self.load_keys()
+        self.load_options()
+
+    def sync_options(self: Self, recurse: bool = True):
         for key, val in self.options.items():
             assert key.isidentifier()
             elem: ET.Element | None = self.find(f"./{key}")
             if elem is None:
-                elem = ET.Element(key)
+                warn(f"adding missing option <{key}>...<{key}/>")
+                elem = UVConfigBase(key)
                 self.append(elem)
-            elem.text = val
+            elem.text = "" if val is None else val
         if recurse:
             for sube in self.subconfigs:
                 sube.sync_options(recurse)
-    def link(self: Self,recurse:bool=True):
+
+    def link(self: Self, recurse: bool = True):
         # Remove existing children that match subconfig tags
-        subconfig_tags = {sub.tag:i for i,sub in enumerate(self.subconfigs)}
+        subconfig_tags = {sub.tag: i for i, sub in enumerate(self.subconfigs)}
         for i in range(len(self)):
             if self[i].tag in subconfig_tags:
-                self[i]=self.subconfigs[subconfig_tags[self[i].tag]]
+                self[i] = self.subconfigs[subconfig_tags[self[i].tag]]
         if recurse:
             for sube in self.subconfigs:
+                if not sube in self:
+                    self.append(sube)
                 sube.link(recurse)
+
+    def __repr__(self, indent: int = 0,has_this:bool=True) -> str:
+        rep = " " * indent + f"<{self.tag}>\n"if has_this else ""
+        # for sube in self:
+        # if isinstance(sube, UVConfigBase):
+        # assert isinstance(sube, UVConfigBase)
+        # rep += sube.__repr__(indent + 2)
+        # else:
+        # rep += " " * (indent + 2) + f"<{sube.tag}>{sube.text}</{sube.tag}>\n"
+        for key, val in self.options.items():
+            rep += " " * (indent + 2) + f"<{key}>{''if val is None else val}</{key}>\n"
+        for sube in self.subconfigs:
+            assert isinstance(sube, UVConfigBase)
+            rep += sube.__repr__(indent + 2)
+        rep += " " * indent + f"</{self.tag}>\n" if has_this else ""
+        return rep
 
 
 class UVTargetCommonOption(UVConfigBase):
     class TargetStatus(UVConfigBase):
-        def __init__(self, elem: ET.Element | None) -> None:
+        def __init__(self, elem: ET.Element | None = None) -> None:
             super().__init__(elem if elem is not None else "TargetStatus")
             assert self.tag == "TargetStatus", f"target status xml tag {self.tag}"
 
-            self.default_vals = {
+            self.default_opts = {
                 "Error": "0",
                 "ExitCodeStop": "0",
                 "ButtonStop": "0",
                 "NotGenerated": "0",
                 "InvalidFlash": "1",
             }
-            self.option_keys = set(self.default_vals.keys())
+            self.option_keys = dict.fromkeys(self.default_opts)
             self.valid_keys = self.option_keys
 
-            self.load_default()
-            self.load_options()
-            self.subconfigs=[]#unused
+            self.load()
 
     target_status: TargetStatus
 
     class CostumeCommands(UVConfigBase):
         def __init__(
-            self, elem: ET.Element | None, id: str = "U", default_tag: str = ""
+            self, elem: ET.Element | None = None, id: str = "U", default_tag: str = ""
         ) -> None:
             super().__init__(elem if elem is not None else default_tag)
             assert self.tag == default_tag, f"costume command xml tag {self.tag}"
 
-            self.default_vals = {
+            self.default_opts = {
                 "RunUserProg1": "0",
                 "RunUserProg2": "0",
                 "UserProg1Name": "",
@@ -118,22 +150,20 @@ class UVTargetCommonOption(UVConfigBase):
                 f"nStop{id}1X": "0",
                 f"nStop{id}2X": "0",
             }
-            self.option_keys = set(self.default_vals.keys())
+            self.option_keys = dict.fromkeys(self.default_opts)
             self.valid_keys = self.option_keys
 
-            self.load_default()
-            self.load_options()
-            self.subconfigs=[]#unused
+            self.load()
 
     before_compile: CostumeCommands
     before_make: CostumeCommands
     after_make: CostumeCommands
 
-    def __init__(self, elem: ET.Element | None) -> None:
+    def __init__(self, elem: ET.Element | None = None) -> None:
         super().__init__(elem if elem is not None else "TargetCommonOption")
         assert self.tag == "TargetCommonOption", f"common option xml tag {self.tag}"
 
-        self.default_vals = {
+        self.default_opts = {
             "Device": "STM32F103ZE",
             "Vendor": "STMicroelectronics",
             "PackID": "Keil.STM32F1xx_DFP.2.4.1",
@@ -181,16 +211,17 @@ class UVTargetCommonOption(UVConfigBase):
             "SelectedForBatchBuild": "0",
             "SVCSIdString": "",
         }
-        self.option_keys = set(self.default_vals.keys()) | {"OutputName"}
-        self.valid_keys = self.option_keys | {
-            "TargetStatus",
-            "BeforeCompile",
-            "BeforeMake",
-            "AfterMake",
-        }
+        self.option_keys = dict.fromkeys(self.default_opts) | {"OutputName": None}
+        self.valid_keys = self.option_keys | dict.fromkeys(
+            (
+                "TargetStatus",
+                "BeforeCompile",
+                "BeforeMake",
+                "AfterMake",
+            )
+        )
 
-        self.load_default()
-        self.load_options()
+        self.load()
 
         self.target_status = UVTargetCommonOption.TargetStatus(
             self.find("./TargetStatus")
@@ -204,15 +235,20 @@ class UVTargetCommonOption(UVConfigBase):
         self.after_make = UVTargetCommonOption.CostumeCommands(
             self.find("./AfterMake"), "A", "AfterMake"
         )
-        self.subconfigs = [self.target_status, self.before_compile, self.before_make, self.after_make]
+        self.subconfigs = [
+            self.target_status,
+            self.before_compile,
+            self.before_make,
+            self.after_make,
+        ]
 
 
 class UVCommonPorperty(UVConfigBase):
     def __init__(self, elem: ET.Element | None = None) -> None:
-        super().__init__(elem if elem is not None else "TargetCommonProperty")
+        super().__init__(elem if elem is not None else "CommonProperty")
         assert self.tag == "CommonProperty", f"common property xml tag {self.tag}"
 
-        self.default_vals = {
+        self.default_opts = {
             "UseCPPCompiler": "0",
             "RVCTCodeConst": "0",
             "RVCTZI": "0",
@@ -228,12 +264,10 @@ class UVCommonPorperty(UVConfigBase):
             "IncludeLibraryModules": "",
             "ComprImg": "1",
         }
-        self.option_keys = set(self.default_vals.keys())
+        self.option_keys = dict.fromkeys(self.default_opts)
         self.valid_keys = self.option_keys
 
-        self.load_default()
-        self.load_options()
-        self.subconfigs=[]#unused
+        self.load()
 
 
 class UVArmAdsMisc(UVConfigBase):
@@ -243,52 +277,53 @@ class UVArmAdsMisc(UVConfigBase):
                 super().__init__(elem if elem is not None else tag)
                 assert self.tag == tag, f"memory xml tag {self.tag}"
 
-                self.default_vals = {
+                self.default_opts = {
                     "Type": "0",
                     "StartAddress": "0x0",
                     "Size": "0x0",
                 }
-                self.option_keys = set(self.default_vals.keys())
+                self.option_keys = dict.fromkeys(self.default_opts)
                 self.valid_keys = self.option_keys
 
-                self.load_default()
-                self.load_options()
-                self.subconfigs=[]#unused   
+                self.load()
 
         ocms: list[Memory]
-        irams: list[Memory]
-        iroms: list[Memory]
+        iram: Memory
+        irom: Memory
+        xram: Memory
         ocr_rvct: list[Memory]  # represent vector
 
         def __init__(self, elem: ET.Element | None = None) -> None:
             super().__init__(elem if elem is not None else "OnChipMemories")
             assert self.tag == "OnChipMemories", f"on chip memories xml tag {self.tag}"
 
-            self.ocms, self.irams, self.iroms, self.ocr_rvct = [], [], [], []
+            self.ocms, self.rams, self.ocr_rvct = [], [], []
             for i in range(1, 7):
                 self.ocms.append(
                     UVArmAdsMisc.OnChipMemories.Memory(
                         self.find(f"./Ocm{i}"), f"Ocm{i}"
                     )
                 )
-            for tag in ("I", "X"):
-                self.irams.append(
-                    UVArmAdsMisc.OnChipMemories.Memory(
-                        self.find(f"./{tag}RAM"), f"{tag}RAM"
-                    )
-                )
-                self.iroms.append(
-                    UVArmAdsMisc.OnChipMemories.Memory(
-                        self.find(f"./{tag}ROM"), f"{tag}ROM"
-                    )
-                )
+
+            self.iram = UVArmAdsMisc.OnChipMemories.Memory(
+                self.find(f"./IRAM"), f"IRAM"
+            )
+            self.irom = UVArmAdsMisc.OnChipMemories.Memory(
+                self.find(f"./IROM"), f"IROM"
+            )
+            self.xram = UVArmAdsMisc.OnChipMemories.Memory(
+                self.find(f"./XRAM"), f"XRAM"
+            )
+
             for i in range(1, 11):
                 self.ocr_rvct.append(
                     UVArmAdsMisc.OnChipMemories.Memory(
                         self.find(f"./OCR_RVCT{i}"), f"OCR_RVCT{i}"
                     )
                 )
-            self.subconfigs = self.ocms + self.irams + self.iroms + self.ocr_rvct
+            self.subconfigs = (
+                self.ocms + [self.iram, self.irom, self.xram] + self.ocr_rvct
+            )
 
     on_chip_memories: OnChipMemories
 
@@ -296,7 +331,7 @@ class UVArmAdsMisc(UVConfigBase):
         super().__init__(elem if elem is not None else "ArmAdsMisc")
         assert self.tag == "ArmAdsMisc", f"target arm ads xml tag {self.tag}"
 
-        self.default_vals = {
+        self.default_opts = {
             "GenerateListings": "0",
             "asHll": "1",
             "asAsm": "1",
@@ -365,11 +400,10 @@ class UVArmAdsMisc(UVConfigBase):
             "Im2Chk": "0",
             "RvctStartVector": "",
         }
-        self.option_keys = set(self.default_vals.keys())
-        self.valid_keys = self.option_keys | {"OnChipMemories"}
+        self.option_keys = dict.fromkeys(self.default_opts)
+        self.valid_keys = self.option_keys | {"OnChipMemories": None}
 
-        self.load_default()
-        self.load_options()
+        self.load()
 
         self.on_chip_memories = UVArmAdsMisc.OnChipMemories(
             self.find("./OnChipMemories")
@@ -382,18 +416,16 @@ class UVVariousControls(UVConfigBase):
         super().__init__(elem if elem is not None else "VariousControls")
         assert self.tag == "VariousControls", f"various controls xml tag {self.tag}"
 
-        self.default_vals = {
+        self.default_opts = {
             "MiscControls": "",
             "Define": "",
             "Undefine": "",
             "IncludePath": "",
         }
-        self.option_keys = set(self.default_vals.keys())
+        self.option_keys = dict.fromkeys(self.default_opts)
         self.valid_keys = self.option_keys
 
-        self.load_default()
-        self.load_options()
-        self.subconfigs=[]#unused
+        self.load()
 
 
 class UVCads(UVConfigBase):  # compiler arm developer suite
@@ -403,7 +435,7 @@ class UVCads(UVConfigBase):  # compiler arm developer suite
         super().__init__(elem if elem is not None else "Cads")
         assert self.tag == "Cads", f"cads xml tag {self.tag}"
 
-        self.default_vals = {
+        self.default_opts = {
             "interw": "1",
             "Optim": "1",
             "oTime": "0",
@@ -429,11 +461,10 @@ class UVCads(UVConfigBase):  # compiler arm developer suite
             "v6Rtti": "0",
         }
 
-        self.option_keys = set(self.default_vals.keys())
-        self.valid_keys = self.option_keys | {"VariousControls"}
+        self.option_keys = dict.fromkeys(self.default_opts)
+        self.valid_keys = self.option_keys | {"VariousControls": None}
 
-        self.load_default()
-        self.load_options()
+        self.load()
 
         self.various_controls = UVVariousControls(self.find("./VariousControls"))
         self.subconfigs = [self.various_controls]
@@ -446,7 +477,7 @@ class UVAads(UVConfigBase):  # assembler arm developer suite
         super().__init__(elem if elem is not None else "Aads")
         assert self.tag == "Aads", f"aads xml tag {self.tag}"
 
-        self.default_vals = {
+        self.default_opts = {
             "interw": "1",
             "Ropi": "0",
             "Rwpi": "0",
@@ -459,11 +490,10 @@ class UVAads(UVConfigBase):  # assembler arm developer suite
             "ClangAsOpt": "1",
         }
 
-        self.option_keys = set(self.default_vals.keys())
-        self.valid_keys = self.option_keys | {"VariousControls"}
+        self.option_keys = dict.fromkeys(self.default_opts)
+        self.valid_keys = self.option_keys | {"VariousControls": None}
 
-        self.load_default()
-        self.load_options()
+        self.load()
 
         self.various_controls = UVVariousControls(self.find("./VariousControls"))
         self.subconfigs = [self.various_controls]
@@ -476,7 +506,7 @@ class UVLDads(UVConfigBase):  # linker arm developer suite
         super().__init__(elem if elem is not None else "LDads")
         assert self.tag == "LDads", f"lads xml tag {self.tag}"
 
-        self.default_vals = {
+        self.default_opts = {
             "umfTarg": "1",
             "Ropi": "0",
             "Rwpi": "0",
@@ -494,12 +524,11 @@ class UVLDads(UVConfigBase):  # linker arm developer suite
             "DisabledWarnings": "",
         }
 
-        self.option_keys = set(self.default_vals.keys())
+        self.option_keys = dict.fromkeys(self.default_opts)
         self.valid_keys = self.option_keys
 
-        self.load_default()
-        self.load_options()
-        self.subconfigs=[]#unused
+        self.load()
+
 
 class UVGroup(UVConfigBase):
     class File(UVConfigBase):
@@ -507,125 +536,272 @@ class UVGroup(UVConfigBase):
             super().__init__(elem if elem is not None else "File")
             assert self.tag == "File", f"file xml tag {self.tag}"
 
-            self.option_keys = {'FileName', 'FileType', 'FilePath'}
+            self.option_keys = dict.fromkeys(("FileName", "FileType", "FilePath"))
             self.valid_keys = self.option_keys
 
-            self.load_default()
-            self.load_options()
-            self.subconfigs=[]#unused
-    files: list[File]
+            self.load()
+
+    class Files(UVConfigBase):
+        files: list
+
+        def __init__(self, elem: ET.Element | None = None) -> None:
+            super().__init__(elem if elem is not None else "Files")
+            assert self.tag == "Files"
+
+            self.valid_keys = {"File": None}
+
+            self.files = []
+            for elem in self.iterfind("./File"):
+                self.files.append(UVGroup.File(elem))
+            self.subconfigs = self.files
+
+    files: Files
+
     def __init__(self, elem: ET.Element | None = None) -> None:
         super().__init__(elem if elem is not None else "Group")
         assert self.tag == "Group", f"group xml tag {self.tag}"
 
-        self.option_keys = {'GroupName'}
-        self.valid_keys = self.option_keys | {"Files"}
+        self.option_keys = {"GroupName": None}
+        self.valid_keys = self.option_keys | {"Files": None}
 
-        self.load_default()
-        self.load_options()
+        self.load()
 
-        self.files = []
-        for elem in self.iterfind("./Files/File"):
-            self.files.append(UVGroup.File(elem))
-        self.subconfigs = self.files
+        self.files = UVGroup.Files(self.find("./Files"))
+        self.subconfigs = [self.files]
+
 
 class UVTarget(UVConfigBase):
-    common_opt: UVTargetCommonOption
-    common_prop: UVCommonPorperty
-    misc_ads: UVArmAdsMisc
-    compiler_ads: UVCads
-    assembler_ads: UVAads
-    linker_ads: UVLDads
+    class TargetOption(UVConfigBase):
+        class TargetArmAds(UVConfigBase):
+
+            misc_ads: UVArmAdsMisc
+            compiler_ads: UVCads
+            assembler_ads: UVAads
+            linker_ads: UVLDads
+
+            def __init__(self, elem: ET.Element | None = None) -> None:
+                super().__init__(elem if elem is not None else "TargetArmAds")
+                assert self.tag == "TargetArmAds"
+                self.valid_keys = dict.fromkeys(("ArmAdsMisc", "Cads", "Aads", "LDads"))
+
+                self.load()
+
+                self.misc_ads = UVArmAdsMisc(self.find("./ArmAdsMisc"))
+                self.compiler_ads = UVCads(self.find("./Cads"))
+                self.assembler_ads = UVAads(self.find("./Aads"))
+                self.linker_ads = UVLDads(self.find("./LDads"))
+
+                self.subconfigs = [
+                    self.misc_ads,
+                    self.compiler_ads,
+                    self.assembler_ads,
+                    self.linker_ads,
+                ]
+
+        arm_ads: TargetArmAds
+        common_prop: UVCommonPorperty
+        common_opt: UVTargetCommonOption
+
+        def __init__(self, elem: ET.Element | None = None) -> None:
+            super().__init__(elem if elem is not None else "TargetOption")
+            assert self.tag == "TargetOption"
+
+            self.valid_keys = dict.fromkeys(
+                (
+                    "TargetCommonOption",
+                    "CommonProperty",
+                    "TargetArmAds",
+                )
+            )
+
+            self.load()
+
+            self.common_opt = UVTargetCommonOption(self.find("./TargetCommonOption"))
+            self.common_prop = UVCommonPorperty(self.find("./CommonProperty"))
+            self.arm_ads = UVTarget.TargetOption.TargetArmAds(
+                self.find("./TargetArmAds")
+            )
+
+            self.subconfigs = [
+                self.common_opt,
+                self.common_prop,
+                self.arm_ads,
+            ]
+
+    targ_opt: TargetOption
+
+    class Groups(UVConfigBase):
+        groups: list[UVGroup]
+
+        def __init__(self, elem: ET.Element | None = None) -> None:
+            super().__init__(elem if elem is not None else "Groups")
+            self.valid_keys = {"Group": None}
+
+            self.load()
+
+            self.groups = []
+            for elem in self.iterfind("./Group"):
+                self.groups.append(UVGroup(elem))
+
+            self.subconfigs = self.groups
+
+    groups: Groups
 
     def __init__(self, elem: ET.Element | None = None) -> None:
         super().__init__(elem if elem is not None else "Target")
         assert self.tag == "Target", f"target xml tag {self.tag}"
 
-        self.default_vals = {
+        self.default_opts = {
             "ToolsetNumber": "0x4",
             "ToolsetName": "ARM_ADS",
             "pCCUsed": "6240000::V6.24::ARMCLANG",
             "uAC6": "1",
         }
-        self.option_keys = set(self.default_vals.keys()) | {"TargetName"}
-        self.valid_keys = self.option_keys | {"TargetOption", "Groups"}
+        self.option_keys = dict.fromkeys(self.default_opts) | {"TargetName": None}
+        self.valid_keys = self.option_keys | {"TargetOption": None, "Groups": None}
 
-        self.load_default()
-        self.load_options()
+        self.load()
 
-        self.common_opt = UVTargetCommonOption(
-            self.find("./TargetOption/TargetCommonOption")
-        )
-        self.common_prop = UVCommonPorperty(self.find("./TargetOption/CommonProperty"))
-        # (debug) dlloptions
-        # debug options
-        # utilities (flash menu command)
-        self.misc_ads = UVArmAdsMisc(
-            self.find("./TargetOption/TargetArmAds/ArmAdsMisc")
-        )
-        self.compiler_ads = UVCads(self.find("./TargetOption/TargetArmAds/Cads"))
-        self.assembler_ads = UVAads(self.find("./TargetOption/TargetArmAds/Aads"))
-        self.linker_ads = UVLDads(self.find("./TargetOption/TargetArmAds/LDads"))
-        self.subconfigs = [self.common_opt, self.common_prop, self.misc_ads, self.compiler_ads, self.assembler_ads, self.linker_ads]
+        self.targ_opt = UVTarget.TargetOption(self.find("./TargetOption"))
+        self.groups = UVTarget.Groups(self.find("./Groups"))
+
+        self.subconfigs = [self.targ_opt, self.groups]
 
 
 class UVRTE(UVConfigBase):
     def __init__(self, elem: ET.Element | None = None) -> None:
         super().__init__(elem if elem is not None else "RTE")
         assert self.tag == "RTE", f"RTE xml tag {self.tag}"
-        self.option_keys = self.valid_keys = {"apis", "components", "files"}
-        self.load_default()
-        self.load_options()
-        self.subconfigs=[]#unused
+        self.option_keys = self.valid_keys = dict.fromkeys(
+            ("apis", "components", "files")
+        )
+
+        self.load()
 
 
 class UVLayer(UVConfigBase):
     def __init__(self, elem: ET.Element | None = None) -> None:
         super().__init__(elem if elem is not None else "Layer")
         assert self.tag == "Layer", f"layer xml tag {self.tag}"
-        self.option_keys = self.valid_keys = {"LayName", "LayPrjMark"}
-        self.load_default()
-        self.load_options()
-        self.subconfigs=[]#unused
+        self.option_keys = self.valid_keys = {"LayName": None, "LayPrjMark": None}
+
+        self.load()
 
 
 class UVPorject(UVConfigBase):
-    targets: list[UVConfigBase]
-    layers: list[UVConfigBase]
-    rte_info: UVConfigBase
+    class Targets(UVConfigBase):
+        targets: list[UVTarget]
+
+        def __init__(self, elem: ET.Element | None = None) -> None:
+            super().__init__(elem if elem is not None else "Targets")
+            assert self.tag == "Targets"
+
+            self.valid_keys = {"Target": None}
+
+            self.load()
+
+            self.targets = []
+            for elem in self.iterfind("./Target"):
+                self.targets.append(UVTarget(elem))
+            if not self.targets:
+                warn("no target found, adding a default target")
+                self.targets.append(UVTarget(None))
+
+            self.subconfigs = self.targets
+
+    class Layers(UVConfigBase):
+        layers: list[UVLayer]
+
+        def __init__(self, elem: ET.Element | None = None) -> None:
+            super().__init__(elem if elem is not None else "Layers")
+            assert self.tag == "Layers"
+
+            self.valid_keys = {"Layer": None}
+            self.load()
+
+            self.layers = []
+            for elem in self.iterfind("./Layer"):
+                self.layers.append(UVLayer(elem))
+            self.subconfigs = self.layers
+
+    class LayerInfo(UVConfigBase):
+        # layers: 'Layers'
+        def __init__(self, elem: ET.Element | None = None) -> None:
+            super().__init__(elem if elem is not None else "LayerInfo")
+            assert self.tag == "LayerInfo"
+            self.valid_keys = {"Layers": None}
+
+            self.load()
+
+            self.layers = UVPorject.Layers(self.find("./Layers"))
+            self.subconfigs = [self.layers]
+
+    targets: Targets
+    rte_info: UVRTE
+    layers: LayerInfo
 
     def __init__(self, elem: ET.Element | None = None) -> None:
         super().__init__(elem if elem is not None else "Project")
         assert self.tag == "Project", f"project xml tag {self.tag}"
 
-        self.default_vals = {
+        self.default_opts = {
             "SchemaVersion": "2.1",
             "Header": "### uVision Project, (C) Keil Software",
         }
-        self.option_keys = set(self.default_vals.keys())
-        self.valid_keys = self.option_keys| {"Targets", "RTE", "LayerInfo"}
-        self.load_default()
+        self.option_keys = dict.fromkeys(self.default_opts)
+        self.valid_keys = self.option_keys | dict.fromkeys(
+            ("Targets", "RTE", "LayerInfo")
+        )
 
-        self.targets, self.layers = [], []
+        self.load()
 
-        for t_elem in self.iterfind("./Targets/Target"):
-            self.targets.append(UVTarget(t_elem))
-        for t_elem in self.iterfind("./LayerInfo/Layers/Layer"):
-            self.layers.append(UVLayer(t_elem))
+        # self.targets, self.layers = [], []
+
+        self.targets = UVPorject.Targets(self.find("./Targets"))
         self.rte_info = UVRTE(self.find("./RTE"))
-        self.subconfigs = self.targets + self.layers + [self.rte_info]
+        self.layers = UVPorject.LayerInfo(self.find("./LayerInfo"))
+
+        self.subconfigs = [self.targets, self.rte_info, self.layers]
 
         self.link()
 
+    def write(self, fn: str):
+        with open(fn, "w", encoding="utf8") as f:
+            # f.write('<?xml version="1.0" encoding="UTF-8" standalone="no" ?>\n')
+            f.write(repr(self))
+    def __repr__(self, *_) -> str:
+        rep='<?xml version="1.0" encoding="UTF-8" standalone="no" ?>\n'
+        rep+='<Project xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" '
+        rep+='xsi:noNamespaceSchemaLocation="project_projx.xsd">\n'
+        rep+=super().__repr__(0,False)
+        rep+='</Project>\n'
+        return rep
+
 
 def test_config():
-    cand=glob.glob("./*.uvprojx")[0]
+    cand = glob.glob("./*.uvprojx")[0]
+    print(cand)
+    tree = ET.parse("./tmp3.uvprojx")
+    proj = UVPorject(tree.getroot())
+    # proj = UVPorject(None)
+
+    proj.sync_options()
+
+    print(
+        proj.targets.targets[0].targ_opt.arm_ads.compiler_ads.various_controls.options
+    )
+    proj.write("out.uvprojx")
+
+    print(proj.targets.targets[0].targ_opt.common_opt.options)
+
+
+def test_config2():
+    cand = glob.glob("./*.uvprojx")[0]
     print(cand)
     tree = ET.parse(cand)
     proj = UVPorject(tree.getroot())
     print(proj)
     proj.sync_options()
-    ET.ElementTree(proj).write("out.uvprojx", encoding="utf-8", xml_declaration=True,short_empty_elements=False)
 
 
 if __name__ == "__main__":
