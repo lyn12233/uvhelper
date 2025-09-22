@@ -50,6 +50,7 @@ def parse_args() -> args_t:
 class Manipulator:
     proj: UVProject
     args: args_t
+    links: list[tuple[str, str]]
 
     def __init__(self, args: args_t) -> None:
         project_dir = args["project_dir"].rstrip("/\\")
@@ -64,12 +65,14 @@ class Manipulator:
         tree = ET.parse(proj_file)
         self.proj = UVProject(tree.getroot())
         self.args = args
+        self.links = []
+        self.collect_links()
 
     @staticmethod
     def fn2stub(args: args_t, fn: str) -> str:
         rel_path = os.path.relpath(fn, args["project_dir"])
         stub_path = os.path.join(args["stub_dir"], rel_path)
-        stub_path = os.path.normpath(stub_path)
+        stub_path = os.path.normpath(os.path.abspath(stub_path))
         return stub_path
 
     @staticmethod
@@ -119,11 +122,11 @@ class Manipulator:
 
         return ret
 
-    def gen_stub(self, args: args_t | None = None):
-        args = self.args if args is None else args
-
+    def collect_links(self):
+        self.links.clear()
+        #
         # collect src files
-        files = set()
+        files: set[str] = set()
         for groups in self.collect_files().values():
             for fns in groups.values():
                 files.update(fns)
@@ -134,21 +137,43 @@ class Manipulator:
                     if os.path.isdir(p):
                         for fn in glob.glob(os.path.join(p, "**", "*"), recursive=True):
                             if os.path.isfile(fn):
-                                files.add(os.path.normpath(os.path.abspath(fn)))
+                                files.add(fn)
                     elif os.path.isfile(p):
-                        files.add(os.path.normpath(os.path.abspath(p)))
-
+                        files.add(p)
+        # collect markdowns
+        mds = glob.glob(self.args["project_dir"] + "/*.md") + glob.glob(
+            self.args["project_dir"] + "/**/*.md"
+        )
+        mds = [f for f in mds if not "uvhelper" in f and not "stub" in f]
+        print(f"markdowns: {mds}")
+        # input()
+        for md in mds:
+            self.links.append((md, self.fn2stub(self.args, md)))
+        # files.update(mds)
         print(f"collected files: {len(files)}")
+        # get links
+        for fn in files:
+            fn = os.path.normpath(os.path.abspath(fn))
+            if (
+                os.path.commonpath([self.args["project_dir"], fn])
+                != self.args["project_dir"]
+            ):
+                print(f"\033[38;5;9mgen_stub: skip {fn}\033[0m")
+                continue
+            stub_fn = self.fn2stub(self.args, fn)
+            self.links.append((fn, stub_fn))
+        # print(self.links)
+        # input()
+
+    def gen_stub(self):
+        #
+        # update links
+        self.collect_links()
+
         # copy files
         with ThreadPoolExecutor() as e:
-            for fn in files:
-                if (
-                    os.path.commonpath([self.args["project_dir"], fn])
-                    != self.args["project_dir"]
-                ):
-                    print(f"\033[38;5;9mgen_stub: skip {fn}\033[0m")
-                    continue
-                e.submit(copy_file, fn, self.fn2stub(args, fn))
+            for fn, stub_fn in self.links:
+                e.submit(copy_file, fn, stub_fn)
 
         # create compile_commands.json
         # for each file->.obj
@@ -181,15 +206,15 @@ class Manipulator:
 
             # commandline amendments
             # use armclang
-            c_defines+=['__ARMCC_VERSION=6230050','__ARM_COMPAT_H']
-            a_defines+=['__ARMCC_VERSION=6230050','__ARM_COMPAT_H']
-            
+            c_defines += ["__ARMCC_VERSION=6230050", "__ARM_COMPAT_H"]
+            a_defines += ["__ARMCC_VERSION=6230050", "__ARM_COMPAT_H"]
+
             for group in targ.groups.groups:
                 for file in group.files.files:
                     output = os.path.splitext(file.path)[0] + ".obj"
                     cmds.append(
                         {
-                            "directory": args["stub_dir"],
+                            "directory": self.args["stub_dir"],
                             "command": f"clang "
                             f'{" ".join(["-I"+inc for inc in (a_inc if file.path.endswith(".s")else c_inc)])} '
                             f'{" ".join(["-D"+defs for defs in (a_defines if file.path.endswith(".s")else c_defines)])}'
@@ -200,11 +225,11 @@ class Manipulator:
                     )
         print("generating compile_commands.json")
         with open(
-            args["stub_dir"] + "/compile_commands.json", "w", encoding="utf-8"
+            self.args["stub_dir"] + "/compile_commands.json", "w", encoding="utf-8"
         ) as f:
             json.dump(cmds, f, indent=4)
 
-    def load_proj(self, args: args_t | None = None): ...
+    def sync_stub(self): ...
 
 
 def stub():
@@ -213,7 +238,7 @@ def stub():
         case "gen_stub":
             mani.gen_stub()
         case "sync_stub":
-            mani.load_proj()
+            mani.sync_stub()
         case _:
             pass
 
