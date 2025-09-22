@@ -7,6 +7,7 @@ import xml.etree.ElementTree as ET
 from warnings import warn
 from concurrent.futures import ThreadPoolExecutor
 import json
+import time
 
 from .uvconfig import UVProject
 from .uvstrap import copy_file, run_command
@@ -19,7 +20,7 @@ def parse_args() -> args_t:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "option",
-        choices=["gen_stub", "sync_stub", "nop"],
+        choices=["gen_stub", "sync_stub", "status", "nop"],
         help="operation to perform with stub",
     )
     parser.add_argument(
@@ -145,12 +146,15 @@ class Manipulator:
             self.args["project_dir"] + "/**/*.md"
         )
         mds = [f for f in mds if not "uvhelper" in f and not "stub" in f]
-        print(f"markdowns: {mds}")
-        # input()
+        if len(mds) < 10:
+            print(f"\033[38;5;6mmarkdowns: {mds}\033[0m")
+        else:
+            print(f"\033[38;5;6mmarkdowns: {mds[:8]}...({len(mds)} in total)\033[0m")
+
         for md in mds:
             self.links.append((md, self.fn2stub(self.args, md)))
-        # files.update(mds)
-        print(f"collected files: {len(files)}")
+
+        print(f"collected files: {len(files)}; markdowns: {len(self.links)}")
         # get links
         for fn in files:
             fn = os.path.normpath(os.path.abspath(fn))
@@ -165,7 +169,20 @@ class Manipulator:
         # print(self.links)
         # input()
 
-    def gen_stub(self):
+    def gen_stub(self) -> None:
+        # ask if stub exists
+        items_in_stub = glob.glob(self.args["stub_dir"] + "/**/*", recursive=True)
+
+        if len(items_in_stub) > 0:
+            print(
+                f"\033[38;5;9mgen_stub: {len(items_in_stub)} items exists in stub: "
+                f"{items_in_stub if len(items_in_stub)<10 else '[...]'}\n"
+                "sure to gen stub?([n]/y)\033[0m"
+            )
+            if input().lower() != "y":
+                print("gen_stub: stopped early")
+                return
+
         #
         # update links
         self.collect_links()
@@ -174,6 +191,10 @@ class Manipulator:
         with ThreadPoolExecutor() as e:
             for fn, stub_fn in self.links:
                 e.submit(copy_file, fn, stub_fn)
+
+        for fn, stub_fn in self.links:
+            tstamp = time.time()
+            os.utime(fn, (tstamp, tstamp))
 
         # create compile_commands.json
         # for each file->.obj
@@ -229,7 +250,31 @@ class Manipulator:
         ) as f:
             json.dump(cmds, f, indent=4)
 
-    def sync_stub(self): ...
+    def collect_status(self) -> list[tuple[str, str]]:
+        self.collect_links()
+        ret: list[tuple[str, str]] = []
+        for fn, stub_fn in self.links:
+            if os.path.getmtime(fn) < os.path.getmtime(stub_fn):
+                ret.append((fn, stub_fn))
+        return ret
+
+    def status(self):
+        stat = self.collect_status()
+        print(
+            f"\033[38;5;6mstatus: {len(stat)} files change in stub{':' if len(stat)>0 else '.'}\033[0m"
+        )
+        for fn, stub_fn in stat:
+            print(f"\033[38;5;10m{fn}  <-  {stub_fn}\033[0m")
+
+    # sync from stub to project
+    def sync_stub(self):
+        status = self.collect_status()
+        if len(status) == 0:
+            print("\033[38;5;9msync_stub: not work to do\033[0m")
+            return
+        with ThreadPoolExecutor() as e:
+            for fn, stub_fn in status:
+                e.submit(copy_file, stub_fn, fn)
 
 
 def stub():
@@ -237,6 +282,8 @@ def stub():
     match mani.args["option"]:
         case "gen_stub":
             mani.gen_stub()
+        case "status":
+            mani.status()
         case "sync_stub":
             mani.sync_stub()
         case _:
