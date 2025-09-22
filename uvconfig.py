@@ -12,7 +12,7 @@ class UVConfigBase(ET.Element):
     default_opts: dict[str, str]
     valid_keys: dict[str, None]
     option_keys: dict[str, None]
-    options: OrderedDict[str, str | None]
+    options: OrderedDict[str, str]
     subconfigs: Sequence["UVConfigBase"]
 
     def __init__(self, elem: ET.Element | str = "") -> None:
@@ -65,7 +65,7 @@ class UVConfigBase(ET.Element):
                     self.default_opts[key] if key in self.default_opts else ""
                 )
             else:
-                self.options[key] = elem.text
+                self.options[key] = elem.text if isinstance(elem.text, str) else ""
 
     def load(self: Self):
         self.load_keys()
@@ -96,8 +96,8 @@ class UVConfigBase(ET.Element):
                     self.append(sube)
                 sube.link(recurse)
 
-    def __repr__(self, indent: int = 0,has_this:bool=True) -> str:
-        rep = " " * indent + f"<{self.tag}>\n"if has_this else ""
+    def __repr__(self, indent: int = 0, has_this: bool = True) -> str:
+        rep = " " * indent + f"<{self.tag}>\n" if has_this else ""
         # for sube in self:
         # if isinstance(sube, UVConfigBase):
         # assert isinstance(sube, UVConfigBase)
@@ -531,18 +531,23 @@ class UVLDads(UVConfigBase):  # linker arm developer suite
 
 
 class UVGroup(UVConfigBase):
-    class File(UVConfigBase):
-        def __init__(self, elem: ET.Element | None = None) -> None:
-            super().__init__(elem if elem is not None else "File")
-            assert self.tag == "File", f"file xml tag {self.tag}"
-
-            self.option_keys = dict.fromkeys(("FileName", "FileType", "FilePath"))
-            self.valid_keys = self.option_keys
-
-            self.load()
 
     class Files(UVConfigBase):
-        files: list
+        class File(UVConfigBase):
+            def __init__(self, elem: ET.Element | None = None) -> None:
+                super().__init__(elem if elem is not None else "File")
+                assert self.tag == "File", f"file xml tag {self.tag}"
+
+                self.option_keys = dict.fromkeys(("FileName", "FileType", "FilePath"))
+                self.valid_keys = self.option_keys
+
+                self.load()
+
+            @property
+            def path(self) -> str:
+                return self.options["FilePath"]
+
+        files: list[File]
 
         def __init__(self, elem: ET.Element | None = None) -> None:
             super().__init__(elem if elem is not None else "Files")
@@ -552,7 +557,7 @@ class UVGroup(UVConfigBase):
 
             self.files = []
             for elem in self.iterfind("./File"):
-                self.files.append(UVGroup.File(elem))
+                self.files.append(UVGroup.Files.File(elem))
             self.subconfigs = self.files
 
     files: Files
@@ -561,6 +566,7 @@ class UVGroup(UVConfigBase):
         super().__init__(elem if elem is not None else "Group")
         assert self.tag == "Group", f"group xml tag {self.tag}"
 
+        self.default_opts = {"GroupName": "DefaultGroupName"}
         self.option_keys = {"GroupName": None}
         self.valid_keys = self.option_keys | {"Files": None}
 
@@ -568,6 +574,10 @@ class UVGroup(UVConfigBase):
 
         self.files = UVGroup.Files(self.find("./Files"))
         self.subconfigs = [self.files]
+
+    @property
+    def name(self) -> str:
+        return self.options["GroupName"]
 
 
 class UVTarget(UVConfigBase):
@@ -656,8 +666,9 @@ class UVTarget(UVConfigBase):
             "ToolsetName": "ARM_ADS",
             "pCCUsed": "6240000::V6.24::ARMCLANG",
             "uAC6": "1",
+            "TargetName": "DefaultTargetName",
         }
-        self.option_keys = dict.fromkeys(self.default_opts) | {"TargetName": None}
+        self.option_keys = dict.fromkeys(self.default_opts)
         self.valid_keys = self.option_keys | {"TargetOption": None, "Groups": None}
 
         self.load()
@@ -666,6 +677,10 @@ class UVTarget(UVConfigBase):
         self.groups = UVTarget.Groups(self.find("./Groups"))
 
         self.subconfigs = [self.targ_opt, self.groups]
+
+    @property
+    def name(self) -> str:
+        return self.options["TargetName"]
 
 
 class UVRTE(UVConfigBase):
@@ -688,7 +703,7 @@ class UVLayer(UVConfigBase):
         self.load()
 
 
-class UVPorject(UVConfigBase):
+class UVProject(UVConfigBase):
     class Targets(UVConfigBase):
         targets: list[UVTarget]
 
@@ -733,7 +748,7 @@ class UVPorject(UVConfigBase):
 
             self.load()
 
-            self.layers = UVPorject.Layers(self.find("./Layers"))
+            self.layers = UVProject.Layers(self.find("./Layers"))
             self.subconfigs = [self.layers]
 
     targets: Targets
@@ -757,9 +772,9 @@ class UVPorject(UVConfigBase):
 
         # self.targets, self.layers = [], []
 
-        self.targets = UVPorject.Targets(self.find("./Targets"))
+        self.targets = UVProject.Targets(self.find("./Targets"))
         self.rte_info = UVRTE(self.find("./RTE"))
-        self.layers = UVPorject.LayerInfo(self.find("./LayerInfo"))
+        self.layers = UVProject.LayerInfo(self.find("./LayerInfo"))
 
         self.subconfigs = [self.targets, self.rte_info, self.layers]
 
@@ -769,12 +784,13 @@ class UVPorject(UVConfigBase):
         with open(fn, "w", encoding="utf8") as f:
             # f.write('<?xml version="1.0" encoding="UTF-8" standalone="no" ?>\n')
             f.write(repr(self))
+
     def __repr__(self, *_) -> str:
-        rep='<?xml version="1.0" encoding="UTF-8" standalone="no" ?>\n'
-        rep+='<Project xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" '
-        rep+='xsi:noNamespaceSchemaLocation="project_projx.xsd">\n'
-        rep+=super().__repr__(0,False)
-        rep+='</Project>\n'
+        rep = '<?xml version="1.0" encoding="UTF-8" standalone="no" ?>\n'
+        rep += '<Project xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" '
+        rep += 'xsi:noNamespaceSchemaLocation="project_projx.xsd">\n'
+        rep += super().__repr__(0, False)
+        rep += "</Project>\n"
         return rep
 
 
@@ -782,7 +798,7 @@ def test_config():
     cand = glob.glob("./*.uvprojx")[0]
     print(cand)
     tree = ET.parse("./tmp3.uvprojx")
-    proj = UVPorject(tree.getroot())
+    proj = UVProject(tree.getroot())
     # proj = UVPorject(None)
 
     proj.sync_options()
@@ -799,7 +815,7 @@ def test_config2():
     cand = glob.glob("./*.uvprojx")[0]
     print(cand)
     tree = ET.parse(cand)
-    proj = UVPorject(tree.getroot())
+    proj = UVProject(tree.getroot())
     print(proj)
     proj.sync_options()
 

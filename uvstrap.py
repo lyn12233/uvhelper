@@ -34,6 +34,7 @@ from . import default_dat
 #   D:\program2\ARMKeil_v5_packs\Keil\STM32F1xx_DFP\2.4.1\Device\Source\system_stm32f10x.c
 
 print_lock = threading.Lock()
+mkdir_lock = threading.Lock()
 
 
 def run_command(cmd: list[str]):
@@ -55,7 +56,11 @@ def copy_file(src: str, dst: str):
                 flush=True,
             )
         return
-    if not (os.path.isfile(dst) or os.path.isdir(dst)):
+    with mkdir_lock:
+        os.makedirs(os.path.dirname(os.path.abspath(dst)), exist_ok=True)
+    if not (
+        os.path.isfile(dst) or os.path.isdir(dst) or os.path.isdir(os.path.dirname(dst))
+    ):
         with print_lock:
             print(
                 f"\033[38;5;9m>>Copy-File {src} to {dst}: (dst not exist)\033[0m",
@@ -159,7 +164,16 @@ def parse_args(args: list[str]) -> dict:
         "(NVIC_Type.IP renamed to NVIC_Type.IPR). "
         "default \033[38;5;10mTrue\033[0m",
     )
+    parser.add_argument(
+        "--deprecated_exit",
+        type=bool,
+        default=True,
+        help="exit now because this tool is \033[38;5;9mdeprecated\033[0m",
+    )
     res = parser.parse_args(args)
+    if res.deprecated_exit:
+        print("exiting at deprecation")
+        exit(0)
 
     st_software_dir = os.path.normpath(os.path.abspath(res.st_software_dir))
     project_dir = os.path.normpath(os.path.abspath(res.project_dir))
@@ -294,6 +308,10 @@ def cleanup(args: dict):
 
 
 def strap():
+    warn(
+        "\033[38;5;9mstrap() bootstraps SPL(standard peripheral lib)"
+        " which is deprecated\033[0m"
+    )
     args = parse_args(sys.argv[1:])
     if args["clean"]:
         cleanup(args)
