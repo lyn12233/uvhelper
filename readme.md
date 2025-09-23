@@ -25,14 +25,15 @@ The idea of 'stub' inherits from [python](https://typing.python.org/en/latest/sp
 
 ## how to use
 
-clone this git under {project_dir}, run `python -m uvhelper <option> ...` at {project_dir},
+- set ARG_KEIL environment variable if requires armclang's std headers
+- clone this git under {project_dir}, run `python -m uvhelper <option> ...` at {project_dir},
 where option's include:
 
-- gen_stub: generates stub, meaning to initialize and populate ./stub dir
-- status: to get info about what files in ./stub is modified
-- sync_stub: synchronize changes in stub to project
-- add_target: *not implemented*
-- add_group: *not implemented*
-- add_source: *not implemented* 
+  - gen_stub: generates stub, meaning to initialize and populate ./stub dir
+  - status: to get info about what files in ./stub is modified
+  - sync_stub: synchronize changes in stub to project
+  - add_target: *not implemented*
+  - add_group: *not implemented*
+  - add_source: *not implemented* 
 
-after stub is generated, open a modern editor at {project_dir}/stub to take advantage of the editor's highighting.
+- after stub is generated, open a modern editor at {project_dir}/stub to take advantage of the editor's highighting.

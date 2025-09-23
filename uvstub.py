@@ -12,7 +12,7 @@ import time
 from .uvconfig import UVProject
 from .uvstrap import copy_file, run_command
 
-type args_t = dict[Literal["option", "project_dir", "stub_dir"], str]
+type args_t = dict[Literal["option", "project_dir", "stub_dir", "keil_dir"], str]
 
 
 def parse_args() -> args_t:
@@ -24,10 +24,27 @@ def parse_args() -> args_t:
         help="operation to perform with stub",
     )
     parser.add_argument(
-        "--project_dir", type=str, default=".", help="directory of the project"
+        "--project_dir",
+        type=str,
+        default=".",
+        help="directory of the project. "
+        f"default . = \033[38;5;10m{os.path.abspath(os.curdir)}\033[0m",
     )
     parser.add_argument(
-        "--stub_dir", type=str, default="./stub", help="directory of the stub files"
+        "--stub_dir",
+        type=str,
+        default="./stub",
+        help="directory of the stub files. "
+        f'default ./stub = \033[38;5;10m{os.path.abspath(os.curdir+"/stub")}\033[0m',
+    )
+    default_keil_dir: str = os.environ["ARG_KEIL"] if "ARG_KEIL" in os.environ else ""
+    parser.add_argument(
+        "--keil_dir",
+        type=str,
+        default=default_keil_dir,
+        help="directory of keil MDK "
+        "installation dir to find armclang includes, default $env:ARG_KEIL = "
+        f"\033[38;5;10m{default_keil_dir}\033[0m",
     )
 
     res = parser.parse_args()
@@ -45,6 +62,7 @@ def parse_args() -> args_t:
         "option": res.option,
         "project_dir": os.path.normpath(os.path.abspath(res.project_dir)),
         "stub_dir": os.path.normpath(os.path.abspath(res.stub_dir)),
+        "keil_dir": os.path.normpath(os.path.abspath(res.keil_dir)),
     }
 
 
@@ -82,6 +100,12 @@ class Manipulator:
         proj_path = os.path.join(args["project_dir"], rel_path)
         proj_path = os.path.normpath(proj_path)
         return proj_path
+
+    # @staticmethod
+    # def sys2stub(args: args_t, fn: str) -> str:
+    #     rel_path = os.path.relpath(fn, args["keil_dir"] + "/ARM/ARMCLANG/include")
+    #     stub_path = os.path.normpath(args["stub_dir"] + "/stub/" + rel_path)
+    #     return stub_path
 
     @staticmethod
     def unwind_paths(paths: str) -> list[str]:
@@ -192,6 +216,19 @@ class Manipulator:
             for fn, stub_fn in self.links:
                 e.submit(copy_file, fn, stub_fn)
 
+            # # copy arm standard includes to ./stub/stub
+            # if os.path.isdir(self.args["keil_dir"] + "/ARM/ARMCLANG/include"):
+            #     for fn in glob.glob(
+            #         self.args["keil_dir"] + "/ARM/ARMCLANG/include/*.h"
+            #     ):
+            #         if os.path.isfile(fn):
+            #             e.submit(copy_file, fn, self.sys2stub(self.args, fn))
+            # else:
+            #     warn(
+            #         f"gen_stub: keil_dir {self.args['keil_dir']} is not valid, skip system includes"
+            #     )
+
+        # update local timestamp
         for fn, stub_fn in self.links:
             tstamp = time.time()
             os.utime(fn, (tstamp, tstamp))
@@ -225,10 +262,20 @@ class Manipulator:
                 .split(";")
             )
 
+            #std includes
+            if os.path.isdir(self.args["keil_dir"]+'/ARM/ARMCLANG/include'):
+                c_inc.append(os.path.normpath(self.args['keil_dir'] + "/ARM/ARMCLANG/include"))
+            else:
+                warn("\033[38;5;9mskip standard headers include\033[0m")
+
             # commandline amendments
             # use armclang
-            c_defines += ["__ARMCC_VERSION=6230050", "__ARM_COMPAT_H"]
-            a_defines += ["__ARMCC_VERSION=6230050", "__ARM_COMPAT_H"]
+            # armclang macros
+            c_defines += ["__ARMCC_VERSION=6230050", "__ARM_ACLE"]  # "__ARM_COMPAT_H"]
+            a_defines += ["__ARMCC_VERSION=6230050", "__ARM_ACLE"]  # "__ARM_COMPAT_H"]
+            # built-in functions, see https://developer.arm.com/documentation/101754/0622/armclang-Reference/Compiler-specific-Intrinsics
+            # void __breakpoint(int);
+            c_defines += [f""]
 
             for group in targ.groups.groups:
                 for file in group.files.files:
@@ -237,6 +284,8 @@ class Manipulator:
                         {
                             "directory": self.args["stub_dir"],
                             "command": f"clang "
+                            "-nostdinc -nostdinc++ -nostdlib -nostdlib++ "  # redirect std includes
+                            "-ffreestanding -Dsize_t=unsigned "  # size_t problem and __asm__ error register
                             f'{" ".join(["-I"+inc for inc in (a_inc if file.path.endswith(".s")else c_inc)])} '
                             f'{" ".join(["-D"+defs for defs in (a_defines if file.path.endswith(".s")else c_defines)])}'
                             f"-o {output} -c {file.path}",
