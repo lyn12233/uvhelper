@@ -1,5 +1,5 @@
 import argparse
-from typing import Literal
+from typing import Literal, TypedDict
 import os
 import glob
 from collections import defaultdict
@@ -12,7 +12,15 @@ import time
 from .uvconfig import UVProject
 from .uvstrap import copy_file, run_command
 
-type args_t = dict[Literal["option", "project_dir", "stub_dir", "keil_dir"], str]
+# type args_t = dict[Literal["option", "project_dir", "stub_dir", "keil_dir"], str]
+
+
+class args_t(TypedDict):
+    option: str
+    project_dir: str
+    stub_dir: str
+    keil_dir: str
+    inplace: bool
 
 
 def parse_args() -> args_t:
@@ -46,6 +54,11 @@ def parse_args() -> args_t:
         "installation dir to find armclang includes, default $env:ARG_KEIL = "
         f"\033[38;5;10m{default_keil_dir}\033[0m",
     )
+    parser.add_argument(
+        "--inplace",
+        action="store_true",
+        help="generate compile_commands.json at project_dir " "rather than stub.",
+    )
 
     res = parser.parse_args()
     # canonicalize paths
@@ -63,6 +76,7 @@ def parse_args() -> args_t:
         "project_dir": os.path.normpath(os.path.abspath(res.project_dir)),
         "stub_dir": os.path.normpath(os.path.abspath(res.stub_dir)),
         "keil_dir": os.path.normpath(os.path.abspath(res.keil_dir)),
+        "inplace": res.inplace,
     }
 
 
@@ -194,45 +208,52 @@ class Manipulator:
         # input()
 
     def gen_stub(self) -> None:
-        # ask if stub exists
-        items_in_stub = glob.glob(self.args["stub_dir"] + "/**/*", recursive=True)
+        if not self.args["inplace"]:
+            # ask if stub exists
+            items_in_stub = glob.glob(self.args["stub_dir"] + "/**/*", recursive=True)
 
-        if len(items_in_stub) > 0:
-            print(
-                f"\033[38;5;9mgen_stub: {len(items_in_stub)} items exists in stub: "
-                f"{items_in_stub if len(items_in_stub)<10 else '[...]'}\n"
-                "sure to gen stub?([n]/y)\033[0m"
-            )
-            if input().lower() != "y":
-                print("gen_stub: stopped early")
-                return
+            if len(items_in_stub) > 0:
+                print(
+                    f"\033[38;5;9mgen_stub: {len(items_in_stub)} items exists in stub: "
+                    f"{items_in_stub if len(items_in_stub)<10 else '[...]'}\n"
+                    "sure to gen stub?([n]/y)\033[0m"
+                )
+                if input().lower() != "y":
+                    print("gen_stub: stopped early")
+                    return
+
+            # >if not self.args["inplace"]<
+
+            #
+            # update links
+            self.collect_links()
+
+            # copy files
+            with ThreadPoolExecutor() as e:
+                for fn, stub_fn in self.links:
+                    e.submit(copy_file, fn, stub_fn)
+
+                # # copy arm standard includes to ./stub/stub
+                #
+                # if os.path.isdir(self.args["keil_dir"] + "/ARM/ARMCLANG/include"):
+                #     for fn in glob.glob(
+                #         self.args["keil_dir"] + "/ARM/ARMCLANG/include/*.h"
+                #     ):
+                #         if os.path.isfile(fn):
+                #             e.submit(copy_file, fn, self.sys2stub(self.args, fn))
+                # else:
+                #     warn(
+                #         f"gen_stub: keil_dir {self.args['keil_dir']} is not valid, skip system includes"
+                #     )
+
+            # update local timestamp
+            for fn, stub_fn in self.links:
+                tstamp = time.time()
+                os.utime(fn, (tstamp, tstamp))
+        # if not self.args["inplace"]/>
 
         #
-        # update links
-        self.collect_links()
-
-        # copy files
-        with ThreadPoolExecutor() as e:
-            for fn, stub_fn in self.links:
-                e.submit(copy_file, fn, stub_fn)
-
-            # # copy arm standard includes to ./stub/stub
-            # if os.path.isdir(self.args["keil_dir"] + "/ARM/ARMCLANG/include"):
-            #     for fn in glob.glob(
-            #         self.args["keil_dir"] + "/ARM/ARMCLANG/include/*.h"
-            #     ):
-            #         if os.path.isfile(fn):
-            #             e.submit(copy_file, fn, self.sys2stub(self.args, fn))
-            # else:
-            #     warn(
-            #         f"gen_stub: keil_dir {self.args['keil_dir']} is not valid, skip system includes"
-            #     )
-
-        # update local timestamp
-        for fn, stub_fn in self.links:
-            tstamp = time.time()
-            os.utime(fn, (tstamp, tstamp))
-
+        #
         # create compile_commands.json
         # for each file->.obj
         cmds: list[dict[Literal["directory", "command", "file", "output"], str]] = []
@@ -262,9 +283,11 @@ class Manipulator:
                 .split(";")
             )
 
-            #std includes
-            if os.path.isdir(self.args["keil_dir"]+'/ARM/ARMCLANG/include'):
-                c_inc.append(os.path.normpath(self.args['keil_dir'] + "/ARM/ARMCLANG/include"))
+            # std includes
+            if os.path.isdir(self.args["keil_dir"] + "/ARM/ARMCLANG/include"):
+                c_inc.append(
+                    os.path.normpath(self.args["keil_dir"] + "/ARM/ARMCLANG/include")
+                )
             else:
                 warn("\033[38;5;9mskip standard headers include\033[0m")
 
@@ -295,7 +318,14 @@ class Manipulator:
                     )
         print("generating compile_commands.json")
         with open(
-            self.args["stub_dir"] + "/compile_commands.json", "w", encoding="utf-8"
+            (
+                self.args["stub_dir"]
+                if not self.args["inplace"]
+                else self.args["project_dir"]
+            )
+            + "/compile_commands.json",
+            "w",
+            encoding="utf-8",
         ) as f:
             json.dump(cmds, f, indent=4)
 
