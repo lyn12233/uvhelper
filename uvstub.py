@@ -10,7 +10,7 @@ import json
 import time
 
 from .uvconfig import UVProject
-from .uvstrap import copy_file, run_command
+from .uvstrap import copy_file, copy_file_to_stub, copy_file_from_stub, run_command
 
 # type args_t = dict[Literal["option", "project_dir", "stub_dir", "keil_dir"], str]
 
@@ -21,6 +21,7 @@ class args_t(TypedDict):
     stub_dir: str
     keil_dir: str
     inplace: bool
+    local_std: bool
 
 
 def parse_args() -> args_t:
@@ -59,6 +60,12 @@ def parse_args() -> args_t:
         action="store_true",
         help="generate compile_commands.json at project_dir " "rather than stub.",
     )
+    parser.add_argument(
+        "--local_std",
+        action="store_true",
+        help="copy std includes to ./stub/stdstub (or ./stdstub with inplace)"
+        "so as to fix incompatibilities in std includes",
+    )
 
     res = parser.parse_args()
     # canonicalize paths
@@ -71,12 +78,15 @@ def parse_args() -> args_t:
         os.path.commonpath([project_dir, stub_dir]) != stub_dir
     ), f"stub_dir {stub_dir} corrupts with project_dir {project_dir}"
 
+    # assert not (res.local_std and res.inplace), "invalid option combination (currently)"
+
     return {
         "option": res.option,
         "project_dir": os.path.normpath(os.path.abspath(res.project_dir)),
         "stub_dir": os.path.normpath(os.path.abspath(res.stub_dir)),
         "keil_dir": os.path.normpath(os.path.abspath(res.keil_dir)),
         "inplace": res.inplace,
+        "local_std": res.local_std,
     }
 
 
@@ -115,11 +125,15 @@ class Manipulator:
         proj_path = os.path.normpath(proj_path)
         return proj_path
 
-    # @staticmethod
-    # def sys2stub(args: args_t, fn: str) -> str:
-    #     rel_path = os.path.relpath(fn, args["keil_dir"] + "/ARM/ARMCLANG/include")
-    #     stub_path = os.path.normpath(args["stub_dir"] + "/stub/" + rel_path)
-    #     return stub_path
+    @staticmethod
+    def std2stub(args: args_t, fn: str) -> str:
+        rel_path = os.path.relpath(fn, args["keil_dir"] + "/ARM/ARMCLANG/include")
+        stub_path = os.path.normpath(
+            (args["stub_dir"] if not args["inplace"] else args["project_dir"])
+            + "/stdstub/"
+            + rel_path
+        )
+        return stub_path
 
     @staticmethod
     def unwind_paths(paths: str) -> list[str]:
@@ -134,6 +148,9 @@ class Manipulator:
                     files[i] = os.path.normpath(os.path.abspath(files[i]))
                     if not os.path.isfile(files[i]):
                         warn(f"file {files[i]} not found, removed from list")
+                        files.pop(i)
+                    if 'stub' in files[i]:
+                        warn(f'skip {files[i]} for token "stub" in{files[i]}')
                         files.pop(i)
                 ret[targ.name][group.name] = files
         return ret
@@ -173,11 +190,13 @@ class Manipulator:
         for inc in self.collect_includes().values():
             for paths in inc.values():
                 for p in paths:
+                    # p is dir
                     if os.path.isdir(p):
                         for fn in glob.glob(os.path.join(p, "**", "*"), recursive=True):
-                            if os.path.isfile(fn):
+                            if os.path.isfile(fn) and not 'stub' in fn:
                                 files.add(fn)
-                    elif os.path.isfile(p):
+                    # p is file
+                    elif os.path.isfile(p) and not 'stub' in p:
                         files.add(p)
         # collect markdowns
         mds = glob.glob(self.args["project_dir"] + "/*.md") + glob.glob(
@@ -207,8 +226,22 @@ class Manipulator:
         # print(self.links)
         # input()
 
+    def collect_stdinc(self) -> list[tuple[str, str]]:
+        incs = []
+        if os.path.isdir(self.args["keil_dir"] + "/ARM/ARMCLANG/include"):
+            for fn in glob.glob(self.args["keil_dir"] + "/ARM/ARMCLANG/include/*.h"):
+                if os.path.isfile(fn):
+                    incs.append((fn, self.std2stub(self.args, fn)))
+        else:
+            warn(
+                f"\033[38;5;9mgen_stub: keil_dir {self.args['keil_dir']} is not valid, "
+                "skip system includes\033[0m"
+            )
+        return incs
+
     def gen_stub(self) -> None:
         if not self.args["inplace"]:
+            # if not inplace, copy and fix all source and header files
             # ask if stub exists
             items_in_stub = glob.glob(self.args["stub_dir"] + "/**/*", recursive=True)
 
@@ -231,7 +264,7 @@ class Manipulator:
             # copy files
             with ThreadPoolExecutor() as e:
                 for fn, stub_fn in self.links:
-                    e.submit(copy_file, fn, stub_fn)
+                    e.submit(copy_file_to_stub, fn, stub_fn)
 
                 # # copy arm standard includes to ./stub/stub
                 #
@@ -251,6 +284,21 @@ class Manipulator:
                 tstamp = time.time()
                 os.utime(fn, (tstamp, tstamp))
         # if not self.args["inplace"]/>
+
+        #
+        #
+        # if local_std, copy and fix stds.
+        if self.args["local_std"]:
+            stdinc_links = self.collect_stdinc()
+            print(
+                f"gen_stub: collected {len(stdinc_links)} std includes: {[os.path.basename(i[0]) for i in stdinc_links]}"
+            )
+            input()
+            with ThreadPoolExecutor() as e:
+                for fn, stub_fn in stdinc_links:
+                    e.submit(copy_file_to_stub, fn, stub_fn)
+            # for fn, stub_fn in stdinc_links:
+            # copy_file_to_stub(fn, stub_fn)
 
         #
         #
@@ -284,7 +332,18 @@ class Manipulator:
             )
 
             # std includes
-            if os.path.isdir(self.args["keil_dir"] + "/ARM/ARMCLANG/include"):
+            if self.args["local_std"]:
+                c_inc.append(
+                    os.path.normpath(
+                        (
+                            self.args["stub_dir"]
+                            if not self.args["inplace"]
+                            else self.args["project_dir"]
+                        )
+                        + "/stdstub"
+                    )
+                )
+            elif os.path.isdir(self.args["keil_dir"] + "/ARM/ARMCLANG/include"):
                 c_inc.append(
                     os.path.normpath(self.args["keil_dir"] + "/ARM/ARMCLANG/include")
                 )
@@ -316,7 +375,7 @@ class Manipulator:
                             "output": output,
                         }
                     )
-        print("generating compile_commands.json")
+        print("generating compile_commands.json: ", end="")
         with open(
             (
                 self.args["stub_dir"]
@@ -328,6 +387,7 @@ class Manipulator:
             encoding="utf-8",
         ) as f:
             json.dump(cmds, f, indent=4)
+        print("done")
 
     def collect_status(self) -> list[tuple[str, str]]:
         self.collect_links()
@@ -353,7 +413,7 @@ class Manipulator:
             return
         with ThreadPoolExecutor() as e:
             for fn, stub_fn in status:
-                e.submit(copy_file, stub_fn, fn)
+                e.submit(copy_file_from_stub, stub_fn, fn)
 
 
 def stub():

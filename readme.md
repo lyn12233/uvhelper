@@ -19,7 +19,7 @@
 - [ ] setup.py to install as a package
 - [ ] manipulating project configuration
 
-> NOTE: `uvhelper` is born from thin interest; currently targeting only armclang, mdk-arm v6; assumes exclusive occupation of {project_dir}/stub dir; assumes `.uvprojx` file is at {project_dir}.
+> NOTE: `uvhelper` is born from thin interest; currently targeting only armclang, mdk-arm v6; assumes exclusive occupation of dir's named stub or stdstub; assumes `.uvprojx` file is at {project_dir}.
 
 ## motivation
 

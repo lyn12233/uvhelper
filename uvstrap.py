@@ -8,6 +8,7 @@ import re
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import threading
+import re
 
 from . import default_dat
 
@@ -45,6 +46,67 @@ def run_command(cmd: list[str]):
             f"(\033[38;5;9m{proc.stderr.decode()}\033[38;5;10m)\033[0m",
             flush=True,
         )
+
+
+def compare_file(src_raw: str, dst: str) -> bool:
+    "compare file content"
+    "returns True if file content differs"
+    CHUNK_SIZE = 4096
+    # compare file content
+    if os.path.isfile(dst):
+        with open(dst, "r", encoding="utf-8") as f:
+            dst_raw = f.read()
+        return dst_raw != src_raw
+    return True
+
+
+def copy_file_with_repl(src: str, dst: str, repls: list[tuple[str, str]]):
+    if not os.path.isfile(src):
+        with print_lock:
+            print(f"\033[38;5;9m>> {src} not exists\033[0m", flush=True)
+        return
+    with mkdir_lock:
+        os.makedirs(os.path.dirname(os.path.abspath(dst)), exist_ok=True)
+    if not (os.path.isfile(dst) or os.path.isdir(os.path.dirname(dst))):
+        with print_lock:
+            print(
+                f"\033[38;5;9m>> {dst} not exist)\033[0m",
+                flush=True,
+            )
+        return
+
+    with open(src, "r", encoding="utf-8") as f:
+        src_raw = f.read()
+    raw = src_raw
+    for ptrn, repl in repls:
+        raw = re.sub(ptrn, repl, raw)
+    msg = "\033[38;5;9mfixed\033[38;5;10m" if raw != src_raw else "free of fix"
+    if raw != src_raw:
+        # exit(-1)
+        # raise
+        pass
+
+        # print(msg)
+    if compare_file(raw, dst):
+        # if 'arm_compat.h' in src:
+        # raise
+        with open(dst, "w", encoding="utf-8") as f:
+            f.write(raw)
+        with print_lock:
+            print(f"\033[38;5;10m({msg}) {src}->{dst}\033[0m")
+    else:
+        with print_lock:
+            print(f"\033[38;5;10m(up-to-date, {msg}) {src}->{dst}\033[0m")
+
+
+def copy_file_to_stub(src: str, dst: str):
+    repls = [(r'__asm__\("(r\d+)"\)', r'__asm__("eax") /*\1*/')]
+    copy_file_with_repl(src, dst, repls)
+
+
+def copy_file_from_stub(src: str, dst: str):
+    repls = [(r'__asm__\("eax"\) /\*(r\d+)\*/', r'__asm__("\1")')]
+    copy_file_with_repl(src, dst, repls)
 
 
 def copy_file(src: str, dst: str):
