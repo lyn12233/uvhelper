@@ -1,11 +1,12 @@
 # from . import uvstrap
 
 import xml.etree.ElementTree as ET
-from typing import Self, Sequence
+from typing import Self, MutableSequence, Literal
 import copy
 from warnings import warn
 import glob
 from collections import OrderedDict
+import os
 
 
 class UVConfigBase(ET.Element):
@@ -13,7 +14,7 @@ class UVConfigBase(ET.Element):
     valid_keys: dict[str, None]
     option_keys: dict[str, None]
     options: OrderedDict[str, str]
-    subconfigs: Sequence["UVConfigBase"]
+    subconfigs: list["UVConfigBase"]
 
     def __init__(self, elem: ET.Element | str = "") -> None:
         if isinstance(elem, ET.Element):
@@ -243,7 +244,7 @@ class UVTargetCommonOption(UVConfigBase):
         ]
 
 
-class UVCommonPorperty(UVConfigBase):
+class UVCommonProperty(UVConfigBase):
     def __init__(self, elem: ET.Element | None = None) -> None:
         super().__init__(elem if elem is not None else "CommonProperty")
         assert self.tag == "CommonProperty", f"common property xml tag {self.tag}"
@@ -268,6 +269,105 @@ class UVCommonPorperty(UVConfigBase):
         self.valid_keys = self.option_keys
 
         self.load()
+
+
+class UVDllOption(UVConfigBase):
+    def __init__(self, elem: ET.Element | None = None) -> None:
+        super().__init__(elem if elem is not None else "DllOption")
+        assert self.tag == "DllOption", f"DllOption tag {self.tag}"
+
+        self.default_opts = {
+            "SimDllName": "SARMCM3.DLL",
+            "SimDllArguments": "-REMAP",
+            "SimDlgDll": "DCM.DLL",
+            "SimDlgDllArguments": "",
+            "TargetDllName": "SARMCM3.DLL",
+            "TargetDllArguments": "",
+            "TargetDlgDll": "TCM.DLL",
+            "TargetDlgDllArguments": "-pCM3",
+        }
+        self.option_keys = dict.fromkeys(self.default_opts)
+        self.valid_keys = self.option_keys
+
+        self.load()
+
+
+class UVDebugOption(UVConfigBase):
+    class OPTHX(UVConfigBase):
+        def __init__(self, elem: ET.Element | None = None) -> None:
+            super().__init__(elem if elem is not None else "OPTHX")
+            assert self.tag == "OPTHX", f"OPTHX tag {self.tag}"
+
+            self.default_opts = {
+                "HexSelection": "1",
+                "HexRangeLowAddress": "0",
+                "HexRangeHighAddress": "0",
+                "HexOffset": "0",
+                "Oh166RecLen": "16",
+            }
+            self.option_keys = dict.fromkeys(self.default_opts)
+            self.valid_keys = self.option_keys
+
+            self.load()
+
+    opthx: OPTHX
+
+    def __init__(self, elem: ET.Element | None = None) -> None:
+        super().__init__(elem if elem is not None else "DebugOption")
+        assert self.tag == "DebugOption", f"DebugOption tag {self.tag}"
+
+        self.valid_keys = {"OPTHX": None}
+
+        self.opthx = UVDebugOption.OPTHX(self.find("./OPTHX"))
+
+        self.subconfigs = [self.opthx]
+
+
+class UVUtilities(UVConfigBase):
+    class Flash1(UVConfigBase):
+        def __init__(self, elem: ET.Element | None = None) -> None:
+            super().__init__(elem if elem is not None else "Flash1")
+            assert self.tag == "Flash1", f"Flash1 tag {self.tag}"
+
+            self.default_opts = {
+                "UseTargetDll": "1",
+                "UseExternalTool": "0",
+                "RunIndependent": "0",
+                "UpdateFlashBeforeDebugging": "1",
+                "Capability": "1",
+                "DriverSelection": "4101",
+            }
+            self.option_keys = dict.fromkeys(self.default_opts)
+            self.valid_keys = self.option_keys
+
+            self.load()
+
+    flash1: Flash1
+
+    def __init__(self, elem: ET.Element | None = None) -> None:
+        super().__init__(elem if elem is not None else "Utilities")
+        assert self.tag == "Utilities", f"Utilities tag {self.tag}"
+
+        self.default_opts = {
+            "bUseTDR": "1",
+            "Flash2": "BIN\\UL2CM3.DLL",
+            "Flash3": "",
+            "Flash4": "",
+            "pFcarmOut": "",
+            "pFcarmGrp": "",
+            "pFcArmRoot": "",
+            "FcArmLst": "0",
+        }
+
+        self.option_keys = dict.fromkeys(self.default_opts)
+
+        self.valid_keys = self.option_keys | {"Flash1": None}
+
+        self.load()
+
+        self.flash1 = UVUtilities.Flash1(self.find("./Flash1"))
+
+        self.subconfigs = [self.flash1]
 
 
 class UVArmAdsMisc(UVConfigBase):
@@ -321,9 +421,10 @@ class UVArmAdsMisc(UVConfigBase):
                         self.find(f"./OCR_RVCT{i}"), f"OCR_RVCT{i}"
                     )
                 )
-            self.subconfigs = (
-                self.ocms + [self.iram, self.irom, self.xram] + self.ocr_rvct
-            )
+            self.subconfigs = [
+                s
+                for s in (self.ocms + [self.iram, self.irom, self.xram] + self.ocr_rvct)
+            ]
 
     on_chip_memories: OnChipMemories
 
@@ -547,6 +648,16 @@ class UVGroup(UVConfigBase):
             def path(self) -> str:
                 return self.options["FilePath"]
 
+            @path.setter
+            def path(self, val: str):
+                assert isinstance(val, str) and not os.path.isabs(
+                    val
+                ), f"file invalid path {val}"
+                self.options["FilePath"] = val
+                self.options["FileName"] = os.path.basename(val)
+                # needs amendment
+                self.options["FileType"] = "1" if val.endswith(".c") else "2"
+
         files: list[File]
 
         def __init__(self, elem: ET.Element | None = None) -> None:
@@ -558,7 +669,13 @@ class UVGroup(UVConfigBase):
             self.files = []
             for elem in self.iterfind("./File"):
                 self.files.append(UVGroup.Files.File(elem))
-            self.subconfigs = self.files
+            self.subconfigs = [f for f in self.files]
+
+        def add_file(self, fn: str):
+            f = UVGroup.Files.File()
+            f.path = fn
+            self.files.append(f)
+            self.subconfigs.append(f)
 
     files: Files
 
@@ -578,6 +695,11 @@ class UVGroup(UVConfigBase):
     @property
     def name(self) -> str:
         return self.options["GroupName"]
+
+    @name.setter
+    def name(self, val: str):
+        assert isinstance(val, str) and val.isidentifier(), f"invalid group name {val}"
+        self.options["GroupName"] = val
 
 
 class UVTarget(UVConfigBase):
@@ -608,9 +730,12 @@ class UVTarget(UVConfigBase):
                     self.linker_ads,
                 ]
 
-        arm_ads: TargetArmAds
-        common_prop: UVCommonPorperty
         common_opt: UVTargetCommonOption
+        common_prop: UVCommonProperty
+        dll_opt: UVDllOption
+        dbg_opt: UVDebugOption
+        util: UVUtilities
+        arm_ads: TargetArmAds
 
         def __init__(self, elem: ET.Element | None = None) -> None:
             super().__init__(elem if elem is not None else "TargetOption")
@@ -620,6 +745,9 @@ class UVTarget(UVConfigBase):
                 (
                     "TargetCommonOption",
                     "CommonProperty",
+                    "DllOption",
+                    "DebugOption",
+                    "Utilities",
                     "TargetArmAds",
                 )
             )
@@ -627,7 +755,10 @@ class UVTarget(UVConfigBase):
             self.load()
 
             self.common_opt = UVTargetCommonOption(self.find("./TargetCommonOption"))
-            self.common_prop = UVCommonPorperty(self.find("./CommonProperty"))
+            self.common_prop = UVCommonProperty(self.find("./CommonProperty"))
+            self.dll_opt = UVDllOption(self.find("./DllOption"))
+            self.dbg_opt = UVDebugOption(self.find("./DebugOption"))
+            self.util = UVUtilities(self.find("./Utilities"))
             self.arm_ads = UVTarget.TargetOption.TargetArmAds(
                 self.find("./TargetArmAds")
             )
@@ -635,6 +766,9 @@ class UVTarget(UVConfigBase):
             self.subconfigs = [
                 self.common_opt,
                 self.common_prop,
+                self.dll_opt,
+                self.dbg_opt,
+                self.util,
                 self.arm_ads,
             ]
 
@@ -642,6 +776,7 @@ class UVTarget(UVConfigBase):
 
     class Groups(UVConfigBase):
         groups: list[UVGroup]
+        _group_names: list[str]
 
         def __init__(self, elem: ET.Element | None = None) -> None:
             super().__init__(elem if elem is not None else "Groups")
@@ -653,7 +788,19 @@ class UVTarget(UVConfigBase):
             for elem in self.iterfind("./Group"):
                 self.groups.append(UVGroup(elem))
 
-            self.subconfigs = self.groups
+            self.subconfigs = [g for g in self.groups]
+
+            self._group_names = [g.name for g in self.groups]
+
+        @property
+        def group_names(self):
+            return tuple(self._group_names)
+
+        def add_group(self, group: UVGroup):
+            assert not group.name in self._group_names, f"{group.name} exists"
+            self.groups.append(group)
+            self.subconfigs.append(group)
+            self._group_names.append(group.name)
 
     groups: Groups
 
@@ -682,6 +829,13 @@ class UVTarget(UVConfigBase):
     def name(self) -> str:
         return self.options["TargetName"]
 
+    @name.setter
+    def name(self, val: str):
+        assert (
+            isinstance(val, str) and val.isidentifier()
+        ), f"invalid target name: {val}"
+        self.options["TargetName"] = val
+
 
 class UVRTE(UVConfigBase):
     def __init__(self, elem: ET.Element | None = None) -> None:
@@ -706,6 +860,7 @@ class UVLayer(UVConfigBase):
 class UVProject(UVConfigBase):
     class Targets(UVConfigBase):
         targets: list[UVTarget]
+        _target_names: list[str]
 
         def __init__(self, elem: ET.Element | None = None) -> None:
             super().__init__(elem if elem is not None else "Targets")
@@ -722,7 +877,19 @@ class UVProject(UVConfigBase):
                 warn("no target found, adding a default target")
                 self.targets.append(UVTarget(None))
 
-            self.subconfigs = self.targets
+            self.subconfigs = [t for t in self.targets]
+
+            self._target_names = [targ.name for targ in self.targets]
+
+        @property
+        def target_names(self) -> list[str]:
+            return self._target_names
+
+        def add_target(self, targ: UVTarget):
+            assert not targ.name in self._target_names, f"target {targ.name} exists"
+            self.targets.append(targ)
+            self.subconfigs.append(targ)
+            self.target_names.append(targ.name)
 
     class Layers(UVConfigBase):
         layers: list[UVLayer]
@@ -737,7 +904,7 @@ class UVProject(UVConfigBase):
             self.layers = []
             for elem in self.iterfind("./Layer"):
                 self.layers.append(UVLayer(elem))
-            self.subconfigs = self.layers
+            self.subconfigs = [l for l in self.layers]
 
     class LayerInfo(UVConfigBase):
         # layers: 'Layers'
