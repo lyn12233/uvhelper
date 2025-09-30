@@ -418,7 +418,9 @@ class Manipulator:
         self.collect_links()
         ret: list[tuple[str, str]] = []
         for fn, stub_fn in self.links:
-            if os.path.getmtime(fn) < os.path.getmtime(stub_fn):
+            if os.path.isfile(stub_fn) and os.path.getmtime(fn) < os.path.getmtime(
+                stub_fn
+            ):
                 ret.append((fn, stub_fn))
         return ret
 
