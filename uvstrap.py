@@ -86,7 +86,6 @@ def copy_file_with_repl(src: str, dst: str, repls: list[tuple[str, str]]):
         # raise
         pass
 
-        # print(msg)
     if compare_file(raw, dst):
         # if 'arm_compat.h' in src:
         # raise
