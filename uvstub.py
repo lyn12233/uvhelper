@@ -45,14 +45,16 @@ def parse_args() -> args_t:
         help="operation to perform with stub",
     )
     parser.add_argument(
-        "--project_dir",'--project-dir',
+        "--project_dir",
+        "--project-dir",
         type=str,
         default=".",
         help="directory of the project. "
         f"default . = \033[38;5;10m{os.path.abspath(os.curdir)}\033[0m",
     )
     parser.add_argument(
-        "--stub_dir",'--stub-dir',
+        "--stub_dir",
+        "--stub-dir",
         type=str,
         default="./stub",
         help="directory of the stub files. "
@@ -60,7 +62,8 @@ def parse_args() -> args_t:
     )
     default_keil_dir: str = os.environ["ARG_KEIL"] if "ARG_KEIL" in os.environ else ""
     parser.add_argument(
-        "--keil_dir",'--keil-dir',
+        "--keil_dir",
+        "--keil-dir",
         type=str,
         default=default_keil_dir,
         help="directory of keil MDK "
@@ -73,13 +76,18 @@ def parse_args() -> args_t:
         help="generate compile_commands.json at project_dir " "rather than stub.",
     )
     parser.add_argument(
-        "--local_std",'--local-std',
+        "--local_std",
+        "--local-std",
         action="store_true",
         help="copy std includes to ./stub/stdstub (or ./stdstub with inplace)"
         "so as to fix incompatibilities in std includes",
     )
-    parser.add_argument('--no_local_std','--no-local-std',action='store_true',help='disable local_std option'
-                        'if both are not specified, local_std is used')
+    parser.add_argument(
+        "--no_local_std",
+        "--no-local-std",
+        action="store_true",
+        help="disable local_std option" "if both are not specified, local_std is used",
+    )
     parser.add_argument(
         "--files",
         type=str,
@@ -90,7 +98,7 @@ def parse_args() -> args_t:
         "group", nargs="?", default="", help="specify a name for target, group, etc"
     )
     parser.add_argument(
-        "--no_par","--no-par", action="store_true", help="disable parallel copying"
+        "--no_par", "--no-par", action="store_true", help="disable parallel copying"
     )
 
     res = parser.parse_args()
@@ -105,7 +113,7 @@ def parse_args() -> args_t:
     ), f"stub_dir {stub_dir} corrupts with project_dir {project_dir}"
 
     # assert not (res.local_std and res.inplace), "invalid option combination (currently)"
-    assert not(res.local_std and res.no_local_std),'invalid option combination'
+    assert not (res.local_std and res.no_local_std), "invalid option combination"
 
     return {
         "option": res.option,
@@ -172,7 +180,8 @@ class Manipulator:
         return paths.replace(",", ";").split(";")
 
     def collect_files(self) -> defaultdict[str, dict[str, list[str]]]:
-        ret = defaultdict(dict)
+        ret: defaultdict[str, dict[str, list[str]]] = defaultdict(dict)
+
         for targ in self.proj.targets.targets:
             for group in targ.groups.groups:
                 files = [file.path for file in group.files.files]
@@ -190,9 +199,12 @@ class Manipulator:
     def collect_includes(
         self,
     ) -> defaultdict[str, dict[Literal["common", "ass_inc", "cmp_inc"], list[str]]]:
-        ret = defaultdict(dict)
+        ret: defaultdict[
+            str, dict[Literal["common", "ass_inc", "cmp_inc"], list[str]]
+        ] = defaultdict(dict)
+
         for targ in self.proj.targets.targets:
-            ret[targ] = {
+            ret[targ.name] = {
                 "common": self.unwind_paths(
                     targ.targ_opt.common_opt.options["IncludePath"]
                 ),
@@ -219,22 +231,27 @@ class Manipulator:
         for groups in self.collect_files().values():
             for fns in groups.values():
                 files.update(fns)
-        #        
+        #
         # collect headers
         for inc in self.collect_includes().values():
             for paths in inc.values():
                 for p in paths:
+                    if "stub" in p:
+                        continue
+
                     # p is dir
                     if os.path.isdir(p):
-                        for fn in glob.glob(os.path.join(p, "**", "*"), recursive=True):
+                        # print(f'collecting from {p}')
+                        for fn in glob.glob(p + "/**/*.h", recursive=True):
+                            # print(f'found {fn}')
                             if os.path.isfile(fn) and not "stub" in fn:
                                 files.add(os.path.normpath(os.path.abspath(fn)))
                     # p is file
                     elif os.path.isfile(p) and not "stub" in p:
-                        fn=p
+                        fn = p
                         files.add(os.path.normpath(os.path.abspath(fn)))
 
-#
+        #
         # collect markdowns
         mds = glob.glob(self.args["project_dir"] + "/*.md") + glob.glob(
             self.args["project_dir"] + "/**/*.md"
@@ -248,7 +265,7 @@ class Manipulator:
         for md in mds:
             self.links.append((md, self.fn2stub(self.args, md)))
 
-#
+        #
         # get links
         print(f"collected files: {len(files)}; markdowns: {len(self.links)}")
         for fn in files:
@@ -433,7 +450,7 @@ class Manipulator:
     def collect_status(self) -> list[tuple[str, str]]:
         self.collect_links()
         ret: list[tuple[str, str]] = []
-        assert len(set([l[0] for l in self.links]))==len(self.links),'multi key'
+        assert len(set([l[0] for l in self.links])) == len(self.links), "multi key"
         for fn, stub_fn in self.links:
             if os.path.isfile(stub_fn) and os.path.getmtime(fn) < os.path.getmtime(
                 stub_fn
@@ -553,7 +570,7 @@ class Manipulator:
 
 def stub():
     mani = Manipulator(parse_args())
-    match mani.args["option"]:
+    match mani.args["option"].replace("-", "_"):
         case "gen_stub":
             mani.gen_stub()
         case "status":
