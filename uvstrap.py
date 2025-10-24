@@ -42,7 +42,7 @@ def run_command(cmd: list[str]):
     try:
         proc = subprocess.run(cmd, capture_output=True)
     except Exception as e:
-        print("\033[38;5;90failed command {cmd} with error: {e}\033[0m")
+        print(f"\033[38;5;9mfailed command {cmd} with error: {e}\033[0m")
         input()
         return
     with print_lock:

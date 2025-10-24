@@ -196,7 +196,7 @@ class Manipulator:
                     if not os.path.isfile(files[i]):
                         warn(f"file {files[i]} not found, removed from list")
                         files.pop(i)
-                    if "stub" in files[i]:
+                    elif "stub" in files[i]:
                         warn(f'skip {files[i]} for token "stub" in{files[i]}')
                         files.pop(i)
                 ret[targ.name][group.name] = files
