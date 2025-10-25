@@ -97,10 +97,10 @@ def copy_file_with_repl(src: str, dst: str, repls: list[tuple[str, str]]):
         with open(dst, "w", encoding="utf-8") as f:
             f.write(raw)
         with print_lock:
-            print(f"\033[38;5;10m({msg}) {src}->{dst}\033[0m")
+            print(f"\033[38;5;10m({msg}) {src} -> {dst}\033[0m")
     else:
         with print_lock:
-            print(f"\033[38;5;10m(up-to-date, {msg}) {src}->{dst}\033[0m")
+            print(f"\033[38;5;10m(up-to-date, {msg}) {src} -> {dst}\033[0m")
 
 
 def copy_file_to_stub(src: str, dst: str):
