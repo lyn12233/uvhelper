@@ -248,10 +248,13 @@ class Manipulator:
                     # p is dir
                     if os.path.isdir(p):
                         # print(f'collecting from {p}')
+
                         for fn in glob.glob(p + "/**/*.h", recursive=True):
                             # print(f'found {fn}')
+
                             if os.path.isfile(fn) and not "stub" in fn:
                                 files.add(os.path.normpath(os.path.abspath(fn)))
+
                     # p is file
                     elif os.path.isfile(p) and not "stub" in p:
                         fn = p
@@ -274,6 +277,7 @@ class Manipulator:
         #
         # get links
         print(f"collected files: {len(files)}; markdowns: {len(self.links)}")
+
         for fn in files:
             fn = os.path.normpath(os.path.abspath(fn))
             if (
@@ -325,7 +329,7 @@ class Manipulator:
             # copy files
             with ThreadPoolExecutor() as e:
                 for fn, stub_fn in self.links:
-                    if self.args["par"]:
+                    if self.args["par"] and 0:
                         e.submit(copy_file_to_stub, fn, stub_fn)
                     else:
                         copy_file_to_stub(fn, stub_fn)
@@ -359,7 +363,7 @@ class Manipulator:
             input()
             with ThreadPoolExecutor() as e:
                 for fn, stub_fn in stdinc_links:
-                    if self.args["par"]:
+                    if self.args["par"] and 0:
                         e.submit(copy_file_to_stub, fn, stub_fn)
                     else:
                         copy_file_to_stub(fn, stub_fn)
@@ -480,7 +484,7 @@ class Manipulator:
             return
         with ThreadPoolExecutor() as e:
             for fn, stub_fn in status:
-                if self.args["par"]:
+                if self.args["par"] and 0:
                     e.submit(copy_file_from_stub, stub_fn, fn)
                 else:
                     copy_file_from_stub(stub_fn, fn)
